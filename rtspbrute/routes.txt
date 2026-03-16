@@ -167,6 +167,7 @@
 /stream/1
 /stream/live.sdp
 /stream1
+/stream2
 /streaming/channels/0
 /streaming/channels/1
 /streaming/channels/101

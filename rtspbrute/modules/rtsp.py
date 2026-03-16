@@ -92,8 +92,15 @@ class RTSPClient:
         return self.status is Status.CONNECTED
 
     @property
+    def status_line(self):
+        """Return just the first line of the RTSP response (the status line)."""
+        if not self.data:
+            return ""
+        return self.data.split("\r\n", 1)[0].split("\n", 1)[0]
+
+    @property
     def is_authorized(self):
-        return "200" in self.data
+        return "200" in self.status_line
 
     def connect(self, port: int = None):
         if self.is_connected:
@@ -151,14 +158,47 @@ class RTSPClient:
         if not self.data:
             return False
 
-        if "Basic" in self.data:
-            self.auth_method = AuthMethod.BASIC
-        elif "Digest" in self.data:
+        # Always extract Digest realm/nonce when present (even if Basic
+        # is also advertised) so subsequent requests can use Digest auth.
+        if "Digest" in self.data:
             self.auth_method = AuthMethod.DIGEST
             self.realm = find("realm", self.data)
             self.nonce = find("nonce", self.data)
+        elif "Basic" in self.data:
+            self.auth_method = AuthMethod.BASIC
         else:
             self.auth_method = AuthMethod.NONE
+
+        # Digest two-step: if we just got a 401 challenge and now have
+        # realm/nonce, immediately retry with Digest credentials on the
+        # same connection so the caller sees the real response (200/401/404).
+        if (
+            "401" in self.status_line
+            and self.realm
+            and self.nonce
+            and credentials != ":"
+        ):
+            self.cseq += 1
+            self.packet = describe(
+                self.ip, port, route, self.cseq, credentials, self.realm, self.nonce
+            )
+            try:
+                self.socket.sendall(self.packet.encode())
+                self.data = self.socket.recv(1024).decode()
+            except Exception as e:
+                self.status = Status.from_exception(e)
+                self.last_error = e
+                self.socket.close()
+                return False
+
+            if not self.data:
+                return False
+
+            # Update nonce if the server sent a fresh one (for nonce chaining).
+            if "Digest" in self.data:
+                new_nonce = find("nonce", self.data)
+                if new_nonce:
+                    self.nonce = new_nonce
 
         return True
 

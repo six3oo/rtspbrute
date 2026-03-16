@@ -54,13 +54,20 @@ def screenshot_targets(input_queue: Queue) -> None:
         # check if "/Streaming/Channels/101/" is in target_url
         if "/Streaming/Channels/101/" in target_url:
             # iterate "/Streaming/Channels/101/" to "/Streaming/Channels/1601/"
+            any_screenshot = False
             for i in range(1, 17):
                 modified_target_url = target_url.replace("/Streaming/Channels/101/", f"/Streaming/Channels/{i}01/")
                 image = get_screenshot(modified_target_url)
                 if image:
+                    any_screenshot = True
                     with LOCK:
                         append_result(image, modified_target_url)
                 PROGRESS_BAR.update(SCREENSHOT_PROGRESS, advance=1)
+            if not any_screenshot:
+                # No screenshots succeeded — still record the URL in result.txt
+                with LOCK:
+                    from pathlib import Path
+                    append_result(Path("/dev/null"), target_url)
         # if "/Streaming/Channels/101/" is not in target_url
         else:
             # check if target_url doesn't have anything after :554/
@@ -70,6 +77,10 @@ def screenshot_targets(input_queue: Queue) -> None:
                 if image:
                     with LOCK:
                         append_result(image, target_url)
+                else:
+                    with LOCK:
+                        from pathlib import Path
+                        append_result(Path("/dev/null"), target_url)
                 PROGRESS_BAR.update(SCREENSHOT_PROGRESS, advance=1)
 
                 # append and iterate /cam/realmonitor?channel=1&subtype=0, /cam/realmonitor?channel=2&subtype=0, ..., /cam/realmonitor?channel=8&subtype=0
@@ -86,6 +97,11 @@ def screenshot_targets(input_queue: Queue) -> None:
                 if image:
                     with LOCK:
                         append_result(image, target_url)
+                else:
+                    # Screenshot failed — still record the URL in result.txt
+                    with LOCK:
+                        from pathlib import Path
+                        append_result(Path("/dev/null"), target_url)
                 PROGRESS_BAR.update(SCREENSHOT_PROGRESS, advance=1)
 
         input_queue.task_done()

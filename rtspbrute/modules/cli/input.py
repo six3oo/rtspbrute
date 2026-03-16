@@ -91,7 +91,7 @@ parser.add_argument(
     metavar="N",
 )
 parser.add_argument(
-    "-T", "--timeout", default=2, type=int, help="the timeout to use for sockets"
+    "-T", "--timeout", default=30, type=int, help="the timeout to use for sockets"
 )
 parser.add_argument("-d", "--debug", action="store_true", help="enable the debug logs")
 parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")

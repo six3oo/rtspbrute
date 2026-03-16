@@ -51,7 +51,7 @@ navigator.clipboard.writeText(img.alt);}
 def create_folder(path: Path):
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(f"Creating {path}")
-    path.mkdir(parents=True)
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def create_file(path: Path):
