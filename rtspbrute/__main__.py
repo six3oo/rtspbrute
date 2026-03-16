@@ -46,6 +46,11 @@ def main():
     utils.create_file(utils.RESULT_FILE)
     utils.generate_html(utils.HTML_FILE)
 
+    # Clear targets.txt so each run starts fresh
+    targets_file = Path.cwd() / "targets.txt"
+    if targets_file.exists():
+        targets_file.write_text("")
+
     # Logging module set up
     logger = logging.getLogger()
     attack.logger_is_enabled = args.debug
