@@ -1,48 +1,82 @@
 # RTSPBrute
 
-[![pipeline status](https://gitlab.com/woolf/RTSPbrute/badges/master/pipeline.svg)](https://gitlab.com/woolf/RTSPbrute/-/commits/master)
-[![coverage report](https://gitlab.com/woolf/RTSPbrute/badges/master/coverage.svg)](https://gitlab.com/woolf/RTSPbrute/-/commits/master)
-
-<p align="center">
-   <a href="https://asciinema.org/a/353291" target="_blank"><img src="https://asciinema.org/a/353291.svg" /></a>
-</p>
-
-> Inspired by [Cameradar](https://github.com/Ullaakut/cameradar)
-
-> Forked from https://gitlab.com/woolf/RTSPbrute
+> Forked from https://gitlab.com/woolf/RTSPbrute and significantly patched for real-world camera compatibility.
 
 ## DISCLAIMER
-This software is provided for research and ethical uses only!
+This software is provided for research and ethical uses only.
+
+---
 
 ## Features
 
 - **Find accessible RTSP streams** on any target
-- Brute-force **stream routes**
-- Brute-force **credentials**
+- Brute-force **stream routes** with corrected 200-only confirmation logic
+- Brute-force **credentials** with native Digest auth two-step
+- **Automatic route recovery** — if credentials are found but the route is wrong, sweeps routes again with known-good credentials
 - **Make screenshots** on accessible streams
+- Hikvision multi-channel expansion (`/Streaming/Channels/101/` → channels 101–1601)
+- **Always records streams to `result.txt`** even when screenshots fail
+- Appends confirmed working stream URLs to `targets.txt` in the working directory (cleared on each run)
+- Time-stamped per-run reports under `reports/<timestamp>/`
 - Generate **user-friendly report** of the results:
-  - `.txt` file with each found stream on new line
-  - `.html` file with screenshot of each found stream
+  - `result.txt`: each found stream URL on a new line — rename to `.m3u` to open directly in VLC
+  - `index.html`: click a screenshot to copy its RTSP URL
 
-### Report files
+---
 
-- `result.txt`: Each target is on a new line. Import to VLC: change extension to `.m3u` and open in VLC
-- `index.html`: Click on the screenshot to copy its link
+## Fixes & Changes (vs upstream)
+
+### Route discovery (`attack.py`)
+
+The upstream code treated HTTP `401` and `403` responses as confirmation that a route was valid. This caused false negatives on cameras (e.g. Tapo, Dahua) that return `401` for **every** route whether it exists or not, making it impossible to distinguish a valid route from a bad one.
+
+**Changes:**
+- Only `200 OK` confirms a route. `401`/`403` are now treated as "camera is alive and requires auth" — the target is passed through to credential bruting with a placeholder route.
+- Added `_check_status()` helper — checks only the **status line** (first line) of the RTSP response, preventing false positive matches on nonces, dates, or challenge strings embedded in response headers.
+- Added `_reset_connection()` helper — closes the socket and resets connection state cleanly between bruteforce attempts. Fixes stale-socket hangs where many cameras close their TCP connection after the first RTSP exchange.
+- Added `_find_working_route()` — once valid credentials are cracked, performs a second route sweep using those credentials to find a route that returns `200`. Handles cameras that gate routes behind authentication.
+- `attack_credentials()` now distinguishes `404` (correct credentials, wrong route) from `401` (wrong credentials) and calls `_find_working_route()` before recording the result.
+
+### Digest authentication (`rtsp.py`)
+
+The upstream code sent one DESCRIBE request and returned whatever the server replied, which meant Digest-auth cameras always returned a raw `401` challenge (with `realm` and `nonce`) — the credential was never actually tested.
+
+**Changes:**
+- `RTSPClient.authorize()` now handles the **Digest two-step** inline: on a `401` response that includes a `realm`+`nonce`, it immediately sends a second authenticated DESCRIBE on the same connection. The caller sees the real result (`200`, `401`, or `404`) rather than always seeing the raw challenge.
+- Added `status_line` property on `RTSPClient` — returns only the first line of `self.data`, preventing the nonce or date strings in WWW-Authenticate headers from being matched as status codes.
+- Nonce chaining: if the server sends a fresh nonce in its authenticated response, it is captured for use in any follow-up requests.
+
+### Screenshot / result recording (`worker.py`)
+
+Upstream silently dropped stream URLs from the report when PyAV failed to capture a screenshot (common on slow or auth-gated streams).
+
+**Changes:**
+- All streams that pass credential bruting are **always written to `result.txt`**, regardless of whether a screenshot succeeds.
+- Hikvision streams (`/Streaming/Channels/101/`) are automatically expanded across 16 channel variants (`/Streaming/Channels/101/` through `/Streaming/Channels/1601/`).
+- Streams with no explicit route path (ending in `:554/`) are tried as-is before any channel iteration.
+
+### Run isolation (`__main__.py`)
+
+- `targets.txt` is **truncated at the start of each run** so results from previous runs do not accumulate.
+
+---
 
 ## Installation
 
 ### Requirements
 
-- `python` (> `3.6`)
+- `python` >= `3.6`
 - `av`
 - `Pillow`
 - `rich`
 
-Must be installed from this git repo, the one on pip is the older, segfault verion
+Install from this repo — the PyPI version is an older release with known segfaults:
 
+```
+pip install -e .
+```
 
-~~pip install rtspbrute~~
-
+---
 
 ## CLI
 
@@ -70,9 +104,9 @@ EXAMPLES
     $ rtspbrute -t targets.txt -st 10 -T 10
 ```
 
-### **"argument"** (`default_value`):
+### Arguments
 
-- **"-t, --targets"** (_No default value_): Set the path to the input file. The file can contain IPs, IP ranges and CIDRs. Each one of them should be on a separate line, e.g.:
+- **`-t, --targets`** _(required)_: Path to input file. Accepts IPs, IP ranges, and CIDRs — one per line:
 
 ```
 0.0.0.0
@@ -80,24 +114,25 @@ EXAMPLES
 192.17.0.0/16
 ```
 
-- **"-p, --ports"** (`554`): Set custom ports, e.g.: `-p 554 5554 8554`
-- **"-r, --routes"** (`routes.txt`): Set custom path to the file with routes. Each route should start with `/` and be on a separate line, e.g.:
+- **`-p, --ports`** (`554`): Ports to scan, e.g. `-p 554 5554 8554`
+- **`-r, --routes`** (`routes.txt`): Path to routes file. Each route must start with `/`:
 
 ```
 /1
-/11
 /h264
+/stream1
 ```
 
-- **"-c, --credentials"** (`credentials.txt`): Set custom path to the file with credentials. Each combination should contain `:` and be on a separate line, e.g.:
+- **`-c, --credentials`** (`credentials.txt`): Path to credentials file. Each line must contain `:`:
 
 ```
 admin:admin
+admin:12345
 user:user
 ```
 
-- **"-ct, --check-threads"** (`500`): Set custom number of threads to brute-force the routes
-- **"-bt, --brute-threads"** (`200`): Set custom number of threads to brute-force the credentials
-- **"-st, --screenshot-threads"** (`20`): Set custom number of threads to screenshot the streams. Smaller number leads to more successful screenshots: when there's too much threads PyAV will throw errors and wouldn't connect to target.
-- **"-T, --timeout"** (`2`): Set custom timeout value for socket connections
-- **"-d, --debug"** (`False`): Enable debug logging to `debug.log` file
+- **`-ct, --check-threads`** (`500`): Threads for route bruteforce
+- **`-bt, --brute-threads`** (`200`): Threads for credential bruteforce
+- **`-st, --screenshot-threads`** (`20`): Threads for screenshots. Lower values yield more successful captures — PyAV drops connections under high thread contention.
+- **`-T, --timeout`** (`2`): Socket timeout in seconds
+- **`-d, --debug`** (`False`): Write debug log to `reports/<timestamp>/debug.log`

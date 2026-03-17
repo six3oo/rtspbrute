@@ -17,3 +17,6 @@ dist/
 rtspbrute.egg-info/
 
 .idea/
+
+# Private files
+targets.txt
